@@ -8,11 +8,10 @@ import base64
 
 import logging
 logging.basicConfig(
-    level=logging.INFO,               
+    level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 )
-
 
 # from .framework import GeSCF
 from framework_ import GeSCF
@@ -36,33 +35,59 @@ app.add_middleware(
 yolo_model = YOLO("./pretrained_weight/yolov10x.pt")
 model = GeSCF(dataset="Random", feature_facet="key", feature_layer=17, embedding_layer=32)
 
+
 def read_image(image_bytes: bytes) -> np.ndarray:
     """Convert uploaded image bytes to OpenCV format"""
     image_np = np.frombuffer(image_bytes, np.uint8)
     image = cv2.imdecode(image_np, cv2.IMREAD_COLOR)
     return image
 
+
 def merge_bounding_boxes(boxes):
             
     def do_boxes_overlap(box1, box2):
         """Checks if two bounding boxes overlap (including touching)."""
-        x1, y1, w1, h1 = box1
-        x1_, y1_, w2, h2 = box2
-        return not (x1 + w1 < x1_ or x1_ + w2 < x1 or y1 + h1 < y1_ or y1_ + h2 < y1)
+        x1, y1, x2, y2 = box1
+        x1_, y1_, x2_, y2_ = box2
+        return not (x2 < x1_ or x2_ < x1 or y2 < y1_ or y2_ < y1)
+    
+    def is_box_inside(inner, outer):
+        """Check if one box is fully inside another"""
+        x1, y1, x2, y2 = inner
+        ox1, oy1, ox2, oy2 = outer
+        return x1 >= ox1 and y1 >= oy1 and x2 <= ox2 and y2 <= oy2
 
+    print(15)
     # Step 1: Ensure all boxes are in (x1, y1, x2, y2) format
-    # labels = [label for label, box in boxes if len(box) == 4]
+    labels = [label for label, box in boxes if len(box) == 4]
     # boxes = [box for label, box in boxes if len(box) == 4]
+    
+    # Separate beds from other boxes
+    bed_boxes = [box for label, box in boxes if label == 'bed']
+    other_boxes = [(label, box) for label, box in boxes if label != 'bed']
+    
+    # Split other boxes into inside-bed and outside-bed
+    inside_boxes = []
+    outside_boxes = []
+    print(16)
+    for label, box in other_boxes:
+        if any(is_box_inside(box, bed) for bed in bed_boxes):
+            inside_boxes.append((label, box))
+        else:
+            outside_boxes.append((label, box))
+    
     # boxes = [box for box in boxes if box is not None]  # Remove invalid entries
 
-    # Step 2: Build adjacency list (graph of overlapping bounding boxes)
-    adjacency_list = {i: set() for i in range(len(boxes))}
-    for i in range(len(boxes)):
-        for j in range(i + 1, len(boxes)):
-            if do_boxes_overlap(boxes[i], boxes[j]):
+    print(17)
+    # Build adjacency list for merging
+    boxes_only = [box for _, box in inside_boxes]
+    adjacency_list = {i: set() for i in range(len(boxes_only))}
+    for i in range(len(boxes_only)):
+        for j in range(i + 1, len(boxes_only)):
+            if do_boxes_overlap(boxes_only[i], boxes_only[j]):
                 adjacency_list[i].add(j)
                 adjacency_list[j].add(i)
-
+    print(18)
     # Step 3: Find connected components (clusters of overlapping boxes)
     visited = set()
     merged_boxes = []
@@ -72,11 +97,11 @@ def merge_bounding_boxes(boxes):
         if node in visited:
             return
         visited.add(node)
-        cluster.append(boxes[node])
+        cluster.append(boxes_only[node])
         for neighbor in adjacency_list[node]:
             dfs(neighbor, cluster)
 
-    for i in range(len(boxes)):
+    for i in range(len(boxes_only)):
         if i not in visited:
             cluster = []
             dfs(i, cluster)
@@ -87,9 +112,15 @@ def merge_bounding_boxes(boxes):
             merged_x2 = max(b[2] for b in cluster)
             merged_y2 = max(b[3] for b in cluster)
 
-            merged_boxes.append((merged_x1, merged_y1, merged_x2, merged_y2))
+            merged_boxes.append(('merged', (merged_x1, merged_y1, merged_x2, merged_y2)))
+    print(19)
+    final_boxes = []
+    final_boxes.extend([('bed', box) for box in bed_boxes])
+    final_boxes.extend(merged_boxes)
+    final_boxes.extend([(label, box) for label, box in outside_boxes])
 
-    return merged_boxes
+    return final_boxes
+
 
 def detect_bounding_boxes_in_mask(final_change_mask, img_t1):
     """
@@ -103,6 +134,7 @@ def detect_bounding_boxes_in_mask(final_change_mask, img_t1):
 
     bboxes = []
     original_h, original_w, _ = img_t1.shape
+    print('w, h', original_w, original_h)
     # Draw bounding boxes around the detected contours
     for contour in contours:
         if cv2.contourArea(contour) > 500:  # Filter out small contours based on area (adjust as needed)
@@ -112,20 +144,46 @@ def detect_bounding_boxes_in_mask(final_change_mask, img_t1):
             #     continue    
             if h < original_h * 0.05 or w < original_w * 0.05:
                 continue        
-            bboxes.append((x, y, w, h))
+            print(12)
+            padding = 400                                
+            cropped_object = img_t1[max(0, y - padding): min(original_h, y + h + padding), max(0, x - padding):min(original_w, x + w + padding)].copy()
+            print(13)
+            yolo_result = yolo_model(cropped_object, verbose=False)
+            print(14)
+            
+            for r in yolo_result:                                
+                for box in r.boxes:
+                    xx1, yy1, xx2, yy2 = map(int, box.xyxy[0])
+                    # if yy2 - yy1 < original_h * 0.025 or xx2 - xx1 < original_w * 0.025:
+                    #     continue        
+                    conf = box.conf.item()
+                    cls = int(box.cls.item())
+                    label = yolo_model.names[cls]
+
+                    # Map back to original image coordinates
+                    xx1, xx2 = max(0, x - padding) + xx1, max(0, x - padding) + xx2
+                    yy1, yy2 = max(0, y - padding) + yy1, max(0, y - padding) + yy2
+
+                    bboxes.append((label, (xx1, yy1, xx2, yy2)))   
+            
+            bboxes.append(('None', (x, y, x + w, y + h)))
+            
             # Draw the bounding box on the second image (img_t1)
             # cv2.rectangle(img_t1, (x, y), (x + w, y + h), (0, 255, 0), 2)  # Green color, thickness=2
     merged_bboxes = merge_bounding_boxes(bboxes)
-    
-    
+    print(20)
+    print(merged_bboxes)
     image_list = []
-    for mbbox in merged_bboxes:
-        x, y, w, h = mbbox
-        cv2.rectangle(img_t1, (x, y), (x + w, y + h), (0, 255, 0), 2)  # Green color, thickness=2
-        image_list.append(img_t1[y:y+h, x:x+w])
+    for label, mbbox in merged_bboxes:
+        print('label', label)
+        print('bbox', mbbox)
+        x1, y1, x2, y2 = mbbox
+        cv2.rectangle(img_t1, (x1, y1), (x2, y2), (0, 255, 0), 2)  # Green color, thickness=2
+        image_list.append(img_t1[y1:y2, x1:x2])
         
     cv2.imwrite('result.jpg', img_t1)
     return image_list
+
 
 def inference(img_clean, img_dirty):
     print(2)
@@ -137,9 +195,10 @@ def inference(img_clean, img_dirty):
     image_list = detect_bounding_boxes_in_mask(final_change_mask, img_dirty)
     
     return image_list
+
      
 @app.post("/compare")
-async def compare_images(image1: UploadFile = File(...), image2: UploadFile = File(...)):
+async def compare_images(image1: UploadFile=File(...), image2: UploadFile=File(...)):
     try:
         # Read images into OpenCV format
         img1 = read_image(await image1.read())
@@ -149,7 +208,7 @@ async def compare_images(image1: UploadFile = File(...), image2: UploadFile = Fi
         if img1 is None or img2 is None:
             return JSONResponse(content={"error": "Invalid image format"}, status_code=400)
                 
-        image_list= inference(img1, img2)
+        image_list = inference(img1, img2)
         
         image_byte_list = []
         label_list = []
@@ -163,7 +222,6 @@ async def compare_images(image1: UploadFile = File(...), image2: UploadFile = Fi
             _, img_encoded = cv2.imencode(".png", image)
             image_byte_list.append(base64.b64encode(img_encoded).decode('utf-8'))
             label_list.append(lab)
-        
             
         return JSONResponse(content={"images": image_byte_list, "labels": label_list})
         # return JSONResponse(content={"images": "ok", "labels": "ok"})
