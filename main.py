@@ -172,16 +172,14 @@ def detect_bounding_boxes_in_mask(final_change_mask, img_t1):
             # cv2.rectangle(img_t1, (x, y), (x + w, y + h), (0, 255, 0), 2)  # Green color, thickness=2
     merged_bboxes = merge_bounding_boxes(bboxes)
     print(20)
-    print(merged_bboxes)
     image_list = []
     for label, mbbox in merged_bboxes:
-        print('label', label)
-        print('bbox', mbbox)
+
         x1, y1, x2, y2 = mbbox
-        cv2.rectangle(img_t1, (x1, y1), (x2, y2), (0, 255, 0), 2)  # Green color, thickness=2
+        # cv2.rectangle(img_t1, (x1, y1), (x2, y2), (0, 255, 0), 2)  # Green color, thickness=2
         image_list.append(img_t1[y1:y2, x1:x2])
         
-    cv2.imwrite('result.jpg', img_t1)
+    # cv2.imwrite('result.jpg', img_t1)
     return image_list
 
 
