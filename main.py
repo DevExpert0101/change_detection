@@ -18,6 +18,8 @@ from framework_ import GeSCF
 # from .framework import GeSCF
 from utils import calculate_metric, show_mask_new
 from ultralytics import YOLO
+import torchvision.ops as ops
+import torch
 
 model = YOLO("./pretrained_weight/yolov10x.pt")
 
@@ -42,6 +44,35 @@ def read_image(image_bytes: bytes) -> np.ndarray:
     image = cv2.imdecode(image_np, cv2.IMREAD_COLOR)
     return image
 
+def is_overlapping(new_box, existing_boxes, iou_threshold=0.7):
+    x1, y1, x2, y2 = new_box
+    new_area = (x2 - x1) * (y2 - y1)
+
+    for ex in existing_boxes:
+        ex1, ey1, ex2, ey2 = ex
+        inter_x1 = max(x1, ex1)
+        inter_y1 = max(y1, ey1)
+        inter_x2 = min(x2, ex2)
+        inter_y2 = min(y2, ey2)
+
+        inter_area = max(0, inter_x2 - inter_x1) * max(0, inter_y2 - inter_y1)
+        union_area = new_area + (ex2 - ex1) * (ey2 - ey1) - inter_area
+
+        iou = inter_area / union_area if union_area > 0 else 0
+        if iou > iou_threshold:
+            return True
+    return False
+
+# Apply NMS on final set of boxes
+def apply_global_nms(bboxes, iou_threshold=0.5):
+    if not bboxes:
+        return []
+
+    boxes_tensor = torch.tensor([box for _, box in bboxes], dtype=torch.float)
+    scores = torch.tensor([1.0] * len(bboxes))  # Dummy scores or use real confidences
+    indices = ops.nms(boxes_tensor, scores, iou_threshold)
+
+    return [bboxes[i] for i in indices]
 
 def merge_bounding_boxes(boxes):
             
@@ -121,6 +152,18 @@ def merge_bounding_boxes(boxes):
 
     return final_boxes
 
+def iou(box1, box2):
+    x1 = max(box1[0], box2[0])
+    y1 = max(box1[1], box2[1])
+    x2 = min(box1[2], box2[2])
+    y2 = min(box1[3], box2[3])
+
+    inter_area = max(0, x2 - x1 + 1) * max(0, y2 - y1 + 1)
+    box1_area = (box1[2] - box1[0] + 1) * (box1[3] - box1[1] + 1)
+    box2_area = (box2[2] - box2[0] + 1) * (box2[3] - box2[1] + 1)
+
+    union_area = box1_area + box2_area - inter_area
+    return inter_area / union_area if union_area > 0 else 0
 
 def detect_bounding_boxes_in_mask(final_change_mask, img_t1):
     """
@@ -136,6 +179,7 @@ def detect_bounding_boxes_in_mask(final_change_mask, img_t1):
     original_h, original_w, _ = img_t1.shape
     print('w, h', original_w, original_h)
     # Draw bounding boxes around the detected contours
+    processed_crop_boxes = []
     for contour in contours:
         if cv2.contourArea(contour) > 500:  # Filter out small contours based on area (adjust as needed)
             # Get the bounding box for the contour
@@ -145,13 +189,24 @@ def detect_bounding_boxes_in_mask(final_change_mask, img_t1):
             if h < original_h * 0.05 or w < original_w * 0.05:
                 continue        
             print(12)
-            padding = 400                                
-            cropped_object = img_t1[max(0, y - padding): min(original_h, y + h + padding), max(0, x - padding):min(original_w, x + w + padding)].copy()
+            
+            x1, y1, x2, y2 = x, y, x + w, y + h
+            if is_overlapping((x1, y1, x2, y2), processed_crop_boxes):
+                continue
+        
+            padding = 400           
+            crop_x1 = max(0, x - padding)
+            crop_y1 = max(0, y - padding)
+            crop_x2 = min(original_w, x + w + padding)
+            crop_y2 = min(original_h, y + h + padding)                     
+            cropped_object = img_t1[crop_y1: crop_y2, crop_x1:crop_x2].copy()
             print(13)
             yolo_result = yolo_model(cropped_object, verbose=False)
+            found_detection = False
             print(14)
             
-            for r in yolo_result:                                
+            for r in yolo_result:    
+                                            
                 for box in r.boxes:
                     xx1, yy1, xx2, yy2 = map(int, box.xyxy[0])
                     # if yy2 - yy1 < original_h * 0.025 or xx2 - xx1 < original_w * 0.025:
@@ -170,7 +225,21 @@ def detect_bounding_boxes_in_mask(final_change_mask, img_t1):
             
             # Draw the bounding box on the second image (img_t1)
             # cv2.rectangle(img_t1, (x, y), (x + w, y + h), (0, 255, 0), 2)  # Green color, thickness=2
-    merged_bboxes = merge_bounding_boxes(bboxes)
+            
+    # Remove overlapping boxes using IOU
+    iou_threshold = 0.5
+    filtered_bboxes = []
+
+    for label, box in bboxes:
+        keep = True
+        for _, fbox in filtered_bboxes:
+            if iou(box, fbox) > iou_threshold:
+                keep = False
+                break
+        if keep:
+            filtered_bboxes.append((label, box))
+            
+    merged_bboxes = merge_bounding_boxes(filtered_bboxes)
     print(20)
     image_list = []
     for label, mbbox in merged_bboxes:
