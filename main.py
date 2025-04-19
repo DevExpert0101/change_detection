@@ -219,7 +219,12 @@ def detect_bounding_boxes_in_mask(final_change_mask, img_t1):
                     xx1, xx2 = max(0, x - padding) + xx1, max(0, x - padding) + xx2
                     yy1, yy2 = max(0, y - padding) + yy1, max(0, y - padding) + yy2
 
+                    if yy2 - yy1 < original_h * 0.05 and xx2 - xx1 < original_w * 0.05:
+                        continue
+                    
                     bboxes.append((label, (xx1, yy1, xx2, yy2)))   
+                    
+                    cv2.rectangle(img_t1, (xx1, yy1), (xx2, yy2), (0, 255, 0), 2)  # Green color, thickness=2
             
             bboxes.append(('None', (x, y, x + w, y + h)))
             
