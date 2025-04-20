@@ -247,14 +247,16 @@ def detect_bounding_boxes_in_mask(final_change_mask, img_t1):
     merged_bboxes = merge_bounding_boxes(filtered_bboxes)
     print(20)
     image_list = []
+    box_list = []
     for label, mbbox in merged_bboxes:
 
         x1, y1, x2, y2 = mbbox
+        box_list.append((x1, y1, x2, y2))
         # cv2.rectangle(img_t1, (x1, y1), (x2, y2), (0, 255, 0), 2)  # Green color, thickness=2
         image_list.append(img_t1[y1:y2, x1:x2])
         
     # cv2.imwrite('result.jpg', img_t1)
-    return image_list
+    return image_list, merged_bboxes
 
 
 def inference(img_clean, img_dirty):
@@ -264,9 +266,9 @@ def inference(img_clean, img_dirty):
     mask_uint8 = final_change_mask.astype(np.uint8) * 255
     final_change_mask = cv2.resize(mask_uint8, (img_dirty.shape[1], img_dirty.shape[0]), interpolation=cv2.INTER_NEAREST)
     
-    image_list = detect_bounding_boxes_in_mask(final_change_mask, img_dirty)
+    image_list, boxes = detect_bounding_boxes_in_mask(final_change_mask, img_dirty)
     
-    return image_list
+    return image_list, boxes
 
      
 @app.post("/compare")
@@ -280,14 +282,17 @@ async def compare_images(image1: UploadFile=File(...), image2: UploadFile=File(.
         if img1 is None or img2 is None:
             return JSONResponse(content={"error": "Invalid image format"}, status_code=400)
                 
-        image_list = inference(img1, img2)
+        image_list, boxes = inference(img1, img2)
         
         image_byte_list = []
         label_list = []
+        bboxes = []
 
         for i in range(len(image_list)):
             image = image_list[i]
-            lab = "lab_list[i]"
+            lab = boxes[i][0]
+            bboxes.append(boxes[i][1])
+            
             if image is None:
                 continue
 
@@ -295,7 +300,7 @@ async def compare_images(image1: UploadFile=File(...), image2: UploadFile=File(.
             image_byte_list.append(base64.b64encode(img_encoded).decode('utf-8'))
             label_list.append(lab)
             
-        return JSONResponse(content={"images": image_byte_list, "labels": label_list})
+        return JSONResponse(content={"images": image_byte_list, "labels": label_list, "bboxes": bboxes})
         # return JSONResponse(content={"images": "ok", "labels": "ok"})
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
