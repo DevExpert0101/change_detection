@@ -224,7 +224,7 @@ def detect_bounding_boxes_in_mask(final_change_mask, img_t1):
                     
                     bboxes.append((label, (xx1, yy1, xx2, yy2)))   
                     
-                    cv2.rectangle(img_t1, (xx1, yy1), (xx2, yy2), (0, 255, 0), 2)  # Green color, thickness=2
+                    # cv2.rectangle(img_t1, (xx1, yy1), (xx2, yy2), (0, 255, 0), 2)  # Green color, thickness=2
             
             bboxes.append(('None', (x, y, x + w, y + h)))
             
