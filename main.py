@@ -21,7 +21,7 @@ from ultralytics import YOLO
 import torchvision.ops as ops
 import torch
 
-model = YOLO("./pretrained_weight/yolov10x.pt")
+model = YOLO("./pretrained_weight/yolo11x.pt")
 
 app = FastAPI()
 
