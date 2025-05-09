@@ -38,7 +38,7 @@ class GeSCF(nn.Module):
         logging.info(f'dataset name: {dataset}')
         
         # self.img_size = (512, 512) if self.dataset != 'TSUNAMI' else (256, 256)
-        self.img_size = (512, 512)
+        self.img_size = (1024, 1024)
         
         # default settings
         self.z_value = -0.52
@@ -49,6 +49,7 @@ class GeSCF(nn.Module):
         self.Nj = 0.2
         self.alpha_t = 0.65
         self.cosine_thr = 0.88
+        
         
         # build SAM
         self.sam_backbone = sam_model_registry["vit_h"](checkpoint="pretrained_weight/sam_vit_h_4b8939.pth").to(device='cuda')
@@ -225,7 +226,7 @@ class GeSCF(nn.Module):
             warped_oov_mask = np.all(img_t1 == [0, 0, 0], axis=-1)
             binary_mask_outliers[warped_oov_mask] = 0
             moderate_mask[warped_oov_mask] = 0
-
+            print('9-1')
             # refine initial pseudo mask 1
             padding_size = 10
             kernel_size = 2 * padding_size + 1
@@ -251,11 +252,12 @@ class GeSCF(nn.Module):
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (17, 17))
         initial_pseudo_mask = cv2.morphologyEx(initial_pseudo_mask, cv2.MORPH_OPEN, kernel)
         contours, _ = cv2.findContours(initial_pseudo_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
         for cnt in contours:
             area = cv2.contourArea(cnt)
-            if area < 100:  # threshold for minimum area to keep
-                cv2.drawContours(initial_pseudo_mask, [cnt], -1, (0, 0, 0), thickness=cv2.FILLED)
-
+            if area < 300:  # threshold for minimum area to keep
+                cv2.drawContours(initial_pseudo_mask, [cnt], -1, (255, 255, 255), thickness=cv2.FILLED)
+        # cv2.imwrite('initial_pseudo_mask.jpg', initial_pseudo_mask)
         print(11)
         ####################################################
         # Geometric-Semantic Mask Matching 
@@ -267,13 +269,13 @@ class GeSCF(nn.Module):
         # geometric intersection matching (t0 > t1)
         for i in range(len(masks_t0)):
             iou, overlap_mask = calculate_iou(initial_pseudo_mask, masks_t0[i]['segmentation'])
+            
             if iou >= self.alpha_t: 
                 
                 # semantic similarity matching (t0 > t1)
                 mask_embedding_t0 = embed_t0[overlap_mask].mean(axis=0)
                 mask_embedding_t1 = embed_t1[overlap_mask].mean(axis=0)
                 cosine_similarity = torch.nn.functional.cosine_similarity(mask_embedding_t0, mask_embedding_t1, dim=0) 
-                    
                 if cosine_similarity < self.cosine_thr:
                     mask_idx_t0.append(i)
                     
@@ -324,24 +326,20 @@ class GeSCF(nn.Module):
                     best_iou = iou
                     best_j = j
 
-            if best_iou < 0.6:  # Only in t0
+            if best_iou < 0.1:  # Only in t0
                 mask_only_in_t0 = np.logical_or(mask_only_in_t0, m0['segmentation'])
             else:
                 c0 = compute_centroid(m0['segmentation'])
                 c1 = compute_centroid(masks_t1[best_j]['segmentation'])
                 if c0 and c1:
                     dist = np.linalg.norm(np.array(c0) - np.array(c1))
-                    if dist > 20:  # pixels threshold for movement
+                    if dist > 300:  # pixels threshold for movement
                         mask_changed_location = np.logical_or(mask_changed_location, m0['segmentation'])
 
         # Repeat similarly for masks_t1
         for j, m1 in enumerate(masks_t1):
-            matched = any(calculate_iou(m1['segmentation'], m0['segmentation'])[0] > 0.3 for m0 in masks_t0)
+            matched = any(calculate_iou(m1['segmentation'], m0['segmentation'])[0] >= 0.0 for m0 in masks_t0)
             if not matched:
                 mask_only_in_t1 = np.logical_or(mask_only_in_t1, m1['segmentation'])
         
-        return final_change_mask
-                
-        
-        
-        
+        return final_change_mask, mask_only_in_t0, mask_only_in_t1, mask_changed_location

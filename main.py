@@ -44,6 +44,7 @@ def read_image(image_bytes: bytes) -> np.ndarray:
     image = cv2.imdecode(image_np, cv2.IMREAD_COLOR)
     return image
 
+
 def is_overlapping(new_box, existing_boxes, iou_threshold=0.7):
     x1, y1, x2, y2 = new_box
     new_area = (x2 - x1) * (y2 - y1)
@@ -63,6 +64,7 @@ def is_overlapping(new_box, existing_boxes, iou_threshold=0.7):
             return True
     return False
 
+
 # Apply NMS on final set of boxes
 def apply_global_nms(bboxes, iou_threshold=0.5):
     if not bboxes:
@@ -73,6 +75,7 @@ def apply_global_nms(bboxes, iou_threshold=0.5):
     indices = ops.nms(boxes_tensor, scores, iou_threshold)
 
     return [bboxes[i] for i in indices]
+
 
 def merge_bounding_boxes(boxes):
             
@@ -152,6 +155,7 @@ def merge_bounding_boxes(boxes):
 
     return final_boxes
 
+
 def iou(box1, box2):
     x1 = max(box1[0], box2[0])
     y1 = max(box1[1], box2[1])
@@ -164,6 +168,7 @@ def iou(box1, box2):
 
     union_area = box1_area + box2_area - inter_area
     return inter_area / union_area if union_area > 0 else 0
+
 
 def detect_bounding_boxes_in_mask(final_change_mask, img_t1):
     """
@@ -191,10 +196,14 @@ def detect_bounding_boxes_in_mask(final_change_mask, img_t1):
             print(12)
             
             x1, y1, x2, y2 = x, y, x + w, y + h
+            
             if is_overlapping((x1, y1, x2, y2), processed_crop_boxes):
                 continue
-        
-            padding = 400           
+            processed_crop_boxes.append((x1, y1, x2, y2))
+            
+            
+            ############## Yolo Object Detection ################
+            padding = 200           
             crop_x1 = max(0, x - padding)
             crop_y1 = max(0, y - padding)
             crop_x2 = min(original_w, x + w + padding)
@@ -205,7 +214,7 @@ def detect_bounding_boxes_in_mask(final_change_mask, img_t1):
             found_detection = False
             print(14)
             
-            for r in yolo_result:    
+            for r in yolo_result: 
                                             
                 for box in r.boxes:
                     xx1, yy1, xx2, yy2 = map(int, box.xyxy[0])
@@ -219,19 +228,20 @@ def detect_bounding_boxes_in_mask(final_change_mask, img_t1):
                     xx1, xx2 = max(0, x - padding) + xx1, max(0, x - padding) + xx2
                     yy1, yy2 = max(0, y - padding) + yy1, max(0, y - padding) + yy2
 
-                    if yy2 - yy1 < original_h * 0.05 and xx2 - xx1 < original_w * 0.05:
-                        continue
+                    # if yy2 - yy1 < original_h * 0.05 and xx2 - xx1 < original_w * 0.05:
+                    #     continue
                     
                     bboxes.append((label, (xx1, yy1, xx2, yy2)))   
                     
                     # cv2.rectangle(img_t1, (xx1, yy1), (xx2, yy2), (0, 255, 0), 2)  # Green color, thickness=2
-            
-            bboxes.append(('None', (x, y, x + w, y + h)))
+            if len(yolo_result) == 0:
+                bboxes.append(('None', (x, y, x + w, y + h)))
+            ############## End of Yolo Object Detection ################
             
             # Draw the bounding box on the second image (img_t1)
             # cv2.rectangle(img_t1, (x, y), (x + w, y + h), (0, 255, 0), 2)  # Green color, thickness=2
             
-    # Remove overlapping boxes using IOU
+    ############### Remove overlapping boxes using IOU ################
     iou_threshold = 0.5
     filtered_bboxes = []
 
@@ -242,33 +252,77 @@ def detect_bounding_boxes_in_mask(final_change_mask, img_t1):
                 keep = False
                 break
         if keep:
-            filtered_bboxes.append((label, box))
+            filtered_bboxes.append((label, box))            
+    ############### End of Remove overlapping boxes using IOU ################
             
     merged_bboxes = merge_bounding_boxes(filtered_bboxes)
     print(20)
-    image_list = []
-    box_list = []
-    for label, mbbox in merged_bboxes:
+    
+    try:
+        image_list = []
+        box_list = []
+        for label, mbbox in merged_bboxes:
 
-        x1, y1, x2, y2 = mbbox
-        box_list.append((x1, y1, x2, y2))
-        # cv2.rectangle(img_t1, (x1, y1), (x2, y2), (0, 255, 0), 2)  # Green color, thickness=2
-        image_list.append(img_t1[y1:y2, x1:x2])
-        
+            x1, y1, x2, y2 = mbbox
+            box_list.append((x1, y1, x2, y2))
+            # cv2.rectangle(img_t1, (x1, y1), (x2, y2), (0, 255, 0), 2)  # Green color, thickness=2
+            image_list.append(img_t1[y1:y2, x1:x2])    
+    except Exception as e:
+        print(e)
+       
     # cv2.imwrite('result.jpg', img_t1)
     return image_list, merged_bboxes
 
 
 def inference(img_clean, img_dirty):
     print(2)
-    final_change_mask = model(img_clean, img_dirty)
+    final_change_mask, mask_only_in_t0, mask_only_in_t1, mask_changed_location = model(img_clean, img_dirty)
     print(3)
-    mask_uint8 = final_change_mask.astype(np.uint8) * 255
-    final_change_mask = cv2.resize(mask_uint8, (img_dirty.shape[1], img_dirty.shape[0]), interpolation=cv2.INTER_NEAREST)
+    final_change_mask_uint8 = final_change_mask.astype(np.uint8) * 255
+    t0_change_mask_uint8 = mask_only_in_t0.astype(np.uint8) * 255
+    t1_change_mask_uint8 = mask_only_in_t1.astype(np.uint8) * 255
+    mask_changed_location_uint8 = mask_changed_location.astype(np.uint8) * 255
+    final_change_mask = cv2.resize(final_change_mask_uint8, (img_dirty.shape[1], img_dirty.shape[0]), interpolation=cv2.INTER_NEAREST)
+    mask_only_in_t0 = cv2.resize(t0_change_mask_uint8, (img_clean.shape[1], img_clean.shape[0]), interpolation=cv2.INTER_NEAREST)
+    mask_only_in_t1 = cv2.resize(t1_change_mask_uint8, (img_dirty.shape[1], img_dirty.shape[0]), interpolation=cv2.INTER_NEAREST)
+    mask_changed_location = cv2.resize(mask_changed_location_uint8, (img_dirty.shape[1], img_dirty.shape[0]), interpolation=cv2.INTER_NEAREST)
     
-    image_list, boxes = detect_bounding_boxes_in_mask(final_change_mask, img_dirty)
+    # image_list, boxes = detect_bounding_boxes_in_mask(final_change_mask, img_dirty)
+    t0_image_list, t0_boxes = detect_bounding_boxes_in_mask(mask_only_in_t0, img_clean)
+    t1_image_list, t1_boxes = detect_bounding_boxes_in_mask(mask_only_in_t1, img_dirty)
+    changed_image_list, changed_boxes = detect_bounding_boxes_in_mask(mask_changed_location, img_dirty)
     
-    return image_list, boxes
+    coords = [box for label, box in t0_boxes]
+    for coord in coords:
+        cv2.rectangle(img_clean, (coord[0], coord[1]), (coord[2], coord[3]), (255, 0, 0), 2)
+    coords = [box for label, box in t1_boxes]
+    for coord in coords:
+        cv2.rectangle(img_dirty, (coord[0], coord[1]), (coord[2], coord[3]), (0, 255, 0), 2)
+    
+    # cv2.imwrite('clean.jpg', img_clean)
+    # cv2.imwrite('dirty.jpg', img_dirty)
+    return t0_image_list, t0_boxes, t1_image_list, t1_boxes, changed_image_list, changed_boxes
+
+
+def get_list(image_list, boxes):
+    image_byte_list = []
+    label_list = []
+    bboxes = []
+
+    for i in range(len(image_list)):
+        image = image_list[i]
+        lab = boxes[i][0]
+        bboxes.append(boxes[i][1])
+        
+        if image is None or image.size == 0:
+            print(f"Skipping invalid image at index {i}")
+            continue
+
+        _, img_encoded = cv2.imencode(".png", image)
+        image_byte_list.append(base64.b64encode(img_encoded).decode('utf-8'))
+        label_list.append(lab)
+        
+    return image_byte_list, label_list, bboxes
 
      
 @app.post("/compare")
@@ -282,25 +336,17 @@ async def compare_images(image1: UploadFile=File(...), image2: UploadFile=File(.
         if img1 is None or img2 is None:
             return JSONResponse(content={"error": "Invalid image format"}, status_code=400)
                 
-        image_list, boxes = inference(img1, img2)
+        t0_image_list, t0_boxes, t1_image_list, t1_boxes, changed_image_list, changed_boxes = inference(img1, img2)
         
-        image_byte_list = []
-        label_list = []
-        bboxes = []
-
-        for i in range(len(image_list)):
-            image = image_list[i]
-            lab = boxes[i][0]
-            bboxes.append(boxes[i][1])
+        t0_image_byte_list, t0_label_list, t0_bboxes = get_list(t0_image_list, t0_boxes)
+        t1_image_byte_list, t1_label_list, t1_bboxes = get_list(t1_image_list, t1_boxes)
+        changed_image_byte_list, changed_label_list, changed_bboxes = get_list(changed_image_list, changed_boxes)
             
-            if image is None:
-                continue
-
-            _, img_encoded = cv2.imencode(".png", image)
-            image_byte_list.append(base64.b64encode(img_encoded).decode('utf-8'))
-            label_list.append(lab)
-            
-        return JSONResponse(content={"images": image_byte_list, "labels": label_list, "bboxes": bboxes})
+        return JSONResponse(content={"t0_images": t0_image_byte_list, "t0_labels": t0_label_list, "t0_bboxes": t0_bboxes,
+                                     "t1_images": t1_image_byte_list, "t1_labels": t1_label_list, "t1_bboxes": t1_bboxes,
+                                     "changed_images": changed_image_byte_list, "changed_labels": changed_label_list, "changed_bboxes": changed_bboxes,
+                                     })
         # return JSONResponse(content={"images": "ok", "labels": "ok"})
     except Exception as e:
+        print(e)
         return JSONResponse(content={"error": str(e)}, status_code=500)

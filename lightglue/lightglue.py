@@ -22,6 +22,7 @@ torch.backends.cudnn.deterministic = True
 
 
 @torch.cuda.amp.custom_fwd(cast_inputs=torch.float32)
+
 def normalize_keypoints(
     kpts: torch.Tensor, size: Optional[torch.Tensor] = None
 ) -> torch.Tensor:
